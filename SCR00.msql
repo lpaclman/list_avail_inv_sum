@@ -1,0 +1,75 @@
+[select avail_stock.prtnum prtnum,
+		avail_stock.lngdsc lngdsc,
+		avail_stock.expqty open_po_qty,
+		avail_stock.pckqty open_pck_qty,
+		avail_stock.untqty stg_qty,
+		((avail_stock.untqty-avail_stock.pckqty)+avail_stock.expqty) total_avail_qty
+   from (select inventory_view.prtnum,
+        		prtdsc.lngdsc,
+        		nvl(open_po.expqty, 0) expqty,
+        		nvl((sum(pckwrk.pckqty)+compck.pckqty), 0) pckqty,
+        		sum(inventory_view.untqty) untqty,
+        		(sum(inventory_view.untqty)-(sum(pckwrk.pckqty)+compck.pckqty)+open_po.expqty) avlqty
+           from inventory_view
+           left
+           join prtdsc
+        	 on prtdsc.colnam = 'prtnum|prt_client_id|wh_id_tmpl'
+        	and prtdsc.colval = inventory_view.prtnum||'|'||inventory_view.prt_client_id||'|'||inventory_view.wh_id
+           left
+           join locmst
+        	 on locmst.stoloc = inventory_view.stoloc
+        	and locmst.wh_id = inventory_view.wh_id
+        	and locmst.locsts <> 'I'
+        	and locmst.useflg = 1
+        	and locmst.cipflg = 0
+           left
+           join (select pckwrk_view.prtnum,
+                        		pckwrk_view.wh_id,
+                        		pckwrk_view.srcloc,
+                        		sum(pckwrk_view.pckqty) pckqty
+                           from pckwrk_view
+                          where pckwrk_view.pcksts != 'C'
+                        	and pckwrk_view.ship_id is not null
+                        	and pckwrk_view.ordnum is not null
+                          group by pckwrk_view.prtnum,
+                        		pckwrk_view.wh_id,
+                        		pckwrk_view.srcloc) pckwrk
+	 on pckwrk.prtnum = inventory_view.prtnum and pckwrk.wh_id = inventory_view.wh_id and pckwrk.srcloc = inventory_view.stoloc
+   left
+   join (select shipment_line.prtnum,
+        		case
+			        when (rpln.pckqty - (sum(shipment_line.pckqty))) > 0 
+        then sum(shipment_line.pckqty)
+			        else 0
+	        	end pckqty
+           from shipment_line
+           join (select pckwrk_hdr.prtnum,
+                        		pckwrk_hdr.wh_id,
+                        		sum(pckwrk_hdr.pckqty) pckqty
+                           from pckwrk_hdr
+                          where pckwrk_hdr.pcksts != 'C'
+                        	and pckwrk_hdr.oprcod = 'PRP'
+                          group by pckwrk_hdr.prtnum,
+                        		pckwrk_hdr.wh_id) rpln
+	 on rpln.prtnum = shipment_line.prtnum and rpln.wh_id = shipment_line.wh_id
+  where shipment_line.wh_id = 'DC01' and shipment_line.linsts = 'I'
+  group by shipment_line.prtnum, rpln.pckqty) compck
+	 on compck.prtnum = inventory_view.prtnum
+   left
+   join (select rimlin.prtnum,
+        		rimlin.wh_id,
+        		(sum(rimlin.expqty)-sum(rimlin.idnqty)) expqty
+           from rimlin
+           left
+           join rimhdr
+        	 on rimhdr.invnum = rimlin.invnum
+        	and rimhdr.wh_id = rimlin.wh_id
+        	and rimhdr.supnum = rimlin.supnum
+        	and rimhdr.client_id = rimlin.client_id
+        	and rimhdr.rimsts = 'OPEN'
+          where rimlin.idnqty < rimlin.expqty
+          group by rimlin.prtnum,
+        		rimlin.wh_id) open_po
+	 on open_po.prtnum = inventory_view.prtnum and open_po.wh_id = inventory_view.wh_id
+  where inventory_view.wh_id = 'DC01' and inventory_view.prmflg = '0' and inventory_view.invsts = 'A'
+  group by inventory_view.prtnum, prtdsc.lngdsc, open_po.expqty, compck.pckqty) avail_stock] catch(-1403)
